@@ -1,0 +1,4 @@
+bin/
+obj/
+ggml-tiny.bin
+wwwroot/ggml-tiny.bin
