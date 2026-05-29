@@ -10,12 +10,12 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseWebSockets();
 
-string modelPath = "ggml-base.bin";
+string modelPath = "ggml-small.bin";
 if (!File.Exists(modelPath))
 {
-    Console.WriteLine("Model not found. Downloading ggml-base.bin... (This may take a minute)");
+    Console.WriteLine("Model not found. Downloading ggml-small.bin... (This may take a minute)");
     using var httpClient = new HttpClient();
-    var response = await httpClient.GetAsync("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin");
+    var response = await httpClient.GetAsync("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin");
     response.EnsureSuccessStatusCode();
     await using var fs = new FileStream(modelPath, FileMode.Create, FileAccess.Write, FileShare.None);
     await response.Content.CopyToAsync(fs);
