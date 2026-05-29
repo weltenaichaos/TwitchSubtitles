@@ -42,8 +42,8 @@ app.Map("/listen", async context =>
         var audioData = new List<float>();
         var remainingBytes = new List<byte>();
 
-        int samplesSinceLastProcess = 0;
         int silenceSamples = 0;
+        bool isSpeaking = false;
 
         while (!receiveResult.CloseStatus.HasValue)
         {
@@ -65,10 +65,8 @@ app.Map("/listen", async context =>
 
             // Convert to floats (efficiently)
             Buffer.BlockCopy(byteBuffer, 0, newFloatArray, 0, completeFloatsCount * 4);
-            audioData.AddRange(newFloatArray);
-            samplesSinceLastProcess += newFloatArray.Length;
 
-            // Silence detection
+            // Silence detection on the new chunk
             float sumSquares = 0;
             for (int i = 0; i < newFloatArray.Length; i++)
             {
@@ -84,6 +82,14 @@ app.Map("/listen", async context =>
             else
             {
                 silenceSamples = 0;
+                isSpeaking = true;
+            }
+
+            // Only accumulate audio if we have started speaking or if we are actively speaking
+            // (this prevents the buffer from filling up with infinite silence before a sentence)
+            if (isSpeaking)
+            {
+                audioData.AddRange(newFloatArray);
             }
 
             // Store remaining incomplete bytes
@@ -93,12 +99,16 @@ app.Map("/listen", async context =>
                 remainingBytes.Add(byteBuffer[i]);
             }
 
-            // Process audio every ~1 second (16000 samples)
-            if (samplesSinceLastProcess >= 16000)
+            // If we've been speaking, and now we detect silence for ~0.8 seconds (12800 samples)
+            // Or if the buffer is getting too large (e.g. 15 seconds = 240000 samples)
+            if (isSpeaking && (silenceSamples > 12800 || audioData.Count > 240000))
             {
                 var audioToProcess = audioData.ToArray();
-                samplesSinceLastProcess = 0;
+                audioData.Clear();
+                isSpeaking = false;
+                silenceSamples = 0;
 
+                // Process the complete sentence
                 var results = processor.ProcessAsync(audioToProcess);
 
                 var transcription = new StringBuilder();
@@ -112,13 +122,6 @@ app.Map("/listen", async context =>
                     var bytes = Encoding.UTF8.GetBytes(transcription.ToString());
                     await webSocket.SendAsync(new ArraySegment<byte>(bytes, 0, bytes.Length),
                         WebSocketMessageType.Text, true, CancellationToken.None);
-                }
-
-                // Clear buffer if there is > 1.5 seconds of silence or buffer is too long (> 15 seconds)
-                if (silenceSamples > 24000 || audioData.Count > 240000)
-                {
-                    audioData.Clear();
-                    silenceSamples = 0;
                 }
             }
 
