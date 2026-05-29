@@ -69,6 +69,14 @@
         startButton.addEventListener('click', startRecording);
         stopButton.addEventListener('click', stopRecording);
 
+        // Autostart on page load
+        window.addEventListener('load', () => {
+            // Some browsers require a user gesture before starting AudioContext,
+            // but we can try to start it right away. If it fails or gets suspended,
+            // the user can still click the Start button.
+            startRecording();
+        });
+
         function downsampleBuffer(buffer, sampleRate, outSampleRate) {
             if (outSampleRate === sampleRate) {
                 return buffer;
