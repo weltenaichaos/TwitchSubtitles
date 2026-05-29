@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitch Subtitles</title>
+    <style>
+        body {
+            background-color: #00ff00; /* Green screen background for OBS */
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #controls {
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        #subtitles {
+            color: white;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px #000000, -2px -2px 4px #000000, 2px -2px 4px #000000, -2px 2px 4px #000000;
+            text-align: center;
+            flex-grow: 1;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding-bottom: 50px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="startButton">Start Subtitles</button>
+        <button id="stopButton" disabled>Stop</button>
+        <span id="status">Status: Disconnected</span>
+    </div>
+
+    <div id="subtitles"></div>
+
+    <script>
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusSpan = document.getElementById('status');
+        const subtitlesDiv = document.getElementById('subtitles');
+
+        let audioContext;
+        let mediaStream;
+        let processor;
+        let websocket;
+
+        const targetSampleRate = 16000;
+
+        startButton.addEventListener('click', startRecording);
+        stopButton.addEventListener('click', stopRecording);
+
+        function downsampleBuffer(buffer, sampleRate, outSampleRate) {
+            if (outSampleRate === sampleRate) {
+                return buffer;
+            }
+            if (outSampleRate > sampleRate) {
+                throw new Error("downsampling rate show be smaller than original sample rate");
+            }
+            const sampleRateRatio = sampleRate / outSampleRate;
+            const newLength = Math.round(buffer.length / sampleRateRatio);
+            const result = new Float32Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+                let accum = 0, count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                    accum += buffer[i];
+                    count++;
+                }
+                result[offsetResult] = accum / count;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
+        async function startRecording() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                websocket = new WebSocket(`${protocol}//${window.location.host}/listen`);
+
+                websocket.onopen = () => {
+                    statusSpan.innerText = 'Status: Connected';
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                };
+
+                websocket.onmessage = (event) => {
+                    const text = event.data;
+                    if (text.trim().length > 0) {
+                        subtitlesDiv.innerText = text;
+                    }
+                };
+
+                websocket.onclose = () => {
+                    statusSpan.innerText = 'Status: Disconnected';
+                    stopRecording();
+                };
+
+                websocket.onerror = (err) => {
+                    console.error('WebSocket Error:', err);
+                    statusSpan.innerText = 'Status: Error';
+                };
+
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(mediaStream);
+
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+
+                processor.onaudioprocess = (e) => {
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {
+                        const inputData = e.inputBuffer.getChannelData(0);
+
+                        // Downsample to 16kHz
+                        const downsampledData = downsampleBuffer(inputData, audioContext.sampleRate, targetSampleRate);
+
+                        websocket.send(downsampledData.buffer);
+                    }
+                };
+
+            } catch (err) {
+                console.error('Error starting recording:', err);
+                statusSpan.innerText = 'Status: Error starting audio';
+            }
+        }
+
+        function stopRecording() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (processor) {
+                processor.disconnect();
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            if (websocket) {
+                websocket.close();
+            }
+
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            statusSpan.innerText = 'Status: Disconnected';
+        }
+    </script>
+</body>
+</html>
