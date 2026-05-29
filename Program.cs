@@ -42,6 +42,9 @@ app.Map("/listen", async context =>
         var audioData = new List<float>();
         var remainingBytes = new List<byte>();
 
+        int samplesSinceLastProcess = 0;
+        int silenceSamples = 0;
+
         while (!receiveResult.CloseStatus.HasValue)
         {
             var totalBytes = remainingBytes.Count + receiveResult.Count;
@@ -63,6 +66,25 @@ app.Map("/listen", async context =>
             // Convert to floats (efficiently)
             Buffer.BlockCopy(byteBuffer, 0, newFloatArray, 0, completeFloatsCount * 4);
             audioData.AddRange(newFloatArray);
+            samplesSinceLastProcess += newFloatArray.Length;
+
+            // Silence detection
+            float sumSquares = 0;
+            for (int i = 0; i < newFloatArray.Length; i++)
+            {
+                sumSquares += newFloatArray[i] * newFloatArray[i];
+            }
+            float rms = newFloatArray.Length > 0 ? MathF.Sqrt(sumSquares / newFloatArray.Length) : 0;
+
+            // Threshold for silence: 0.01f is usually quiet background noise
+            if (rms < 0.01f)
+            {
+                silenceSamples += newFloatArray.Length;
+            }
+            else
+            {
+                silenceSamples = 0;
+            }
 
             // Store remaining incomplete bytes
             remainingBytes.Clear();
@@ -71,11 +93,11 @@ app.Map("/listen", async context =>
                 remainingBytes.Add(byteBuffer[i]);
             }
 
-            // Process audio every ~2 seconds (16kHz * 2 = 32000 floats)
-            if (audioData.Count >= 32000)
+            // Process audio every ~1 second (16000 samples)
+            if (samplesSinceLastProcess >= 16000)
             {
                 var audioToProcess = audioData.ToArray();
-                audioData.Clear(); // Clear early to not block incoming audio, though process is sync here
+                samplesSinceLastProcess = 0;
 
                 var results = processor.ProcessAsync(audioToProcess);
 
@@ -90,6 +112,13 @@ app.Map("/listen", async context =>
                     var bytes = Encoding.UTF8.GetBytes(transcription.ToString());
                     await webSocket.SendAsync(new ArraySegment<byte>(bytes, 0, bytes.Length),
                         WebSocketMessageType.Text, true, CancellationToken.None);
+                }
+
+                // Clear buffer if there is > 1.5 seconds of silence or buffer is too long (> 15 seconds)
+                if (silenceSamples > 24000 || audioData.Count > 240000)
+                {
+                    audioData.Clear();
+                    silenceSamples = 0;
                 }
             }
 
