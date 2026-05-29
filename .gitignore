@@ -3,3 +3,4 @@ obj/
 ggml-tiny.bin
 wwwroot/ggml-tiny.bin
 ggml-small.bin
+ggml-base.bin
